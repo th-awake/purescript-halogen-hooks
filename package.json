@@ -9,14 +9,12 @@
   "scripts": {
     "postinstall": "node node_modules/puppeteer/install.js",
     "clean": "rm -rf .spago output node_modules *.lock",
-    "build": "spago build",
-    "build:examples": "spago -x examples/examples.dhall build",
-    "build:test": "spago -x test/test.dhall build",
-    "snapshot": "npm run bundle:performance && spago -x test/test.dhall run --main Performance.Snapshot.Write",
-    "test": "spago -x test/test.dhall test",
-    "test:performance": "npm run bundle:performance && spago -x test/test.dhall run --main Performance.Main",
-    "bundle:examples": "spago -x examples/examples.dhall bundle-app --minify --main Example.Main --to examples/app.js",
-    "bundle:performance": "spago -x test/test.dhall bundle-app --minify --main Performance.Test.App --to test/test.js --no-build"
+    "test-normal": "npm run build:test-normal && npm run run:test-normal",
+    "build:test-normal": "spago -x test/test.dhall bundle-app --main Performance.Test.App --to test/test.js --minify",
+    "run:test-normal": "node test-normal.mjs",
+    "test-optimized": "npm run build:test-optimized && npm run run:test-optimized",
+    "build:test-optimized": "spago -x test/test.optimized.dhall bundle-app --main Performance.Test.App --to test/test.js --minify",
+    "run:test-optimized": "node test-optimized.mjs"
   },
   "devDependencies": {
     "filter-console": "^0.1.1",
