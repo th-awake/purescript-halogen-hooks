@@ -4,13 +4,14 @@ import Prelude
 
 import Data.Foldable (fold)
 import Data.Tuple.Nested ((/\))
-import Effect.Aff (Aff)
+import Effect.Aff (Aff, launchAff_)
+import Effect.Unsafe (unsafePerformEffect)
 import Halogen as H
 import Halogen.Hooks (class HookNewtype, type (<>), Hook, HookM, UseMemo, UseState)
 import Halogen.Hooks as Hooks
 import Halogen.Hooks.Internal.Eval.Types (InterpretHookReason(..))
 import Test.Setup.Eval (evalM, mkEval, initDriver)
-import Test.Setup.Log (logShouldBe, readResult, unsafeWriteLog)
+import Test.Setup.Log (logShouldBe, readResult, writeLog)
 import Test.Setup.Types (LogRef, MemoType(..), TestEvent(..))
 import Test.Spec (Spec, before, describe, it)
 import Test.Spec.Assertions (shouldEqual)
@@ -56,17 +57,17 @@ useMemoCount log = Hooks.wrap Hooks.do
     , expensive3
     }
   where
-  memoize1 deps@{ state1 } = Hooks.captures deps $ flip Hooks.useMemo \_ -> do
-    let _ = unsafeWriteLog (RunMemo (CalculateMemo 1)) log
-    state1 + 5
+  memoize1 deps@{ state1 } = Hooks.captures deps $ flip Hooks.useMemo \_ -> unsafePerformEffect do
+    _ <- launchAff_ $ writeLog (RunMemo (CalculateMemo 1)) log
+    pure (state1 + 5)
 
-  memoize2 deps@{ state2 } = Hooks.captures deps $ flip Hooks.useMemo \_ -> do
-    let _ = unsafeWriteLog (RunMemo (CalculateMemo 2)) log
-    state2 + 5
+  memoize2 deps@{ state2 } = Hooks.captures deps $ flip Hooks.useMemo \_ -> unsafePerformEffect do
+    _ <- launchAff_ $ writeLog (RunMemo (CalculateMemo 2)) log
+    pure (state2 + 5)
 
-  memoize3 deps@{ state1, state2 } = Hooks.captures deps $ flip Hooks.useMemo \_ -> do
-    let _ = unsafeWriteLog (RunMemo (CalculateMemo 3)) log
-    state1 + state2 + 5
+  memoize3 deps@{ state1, state2 } = Hooks.captures deps $ flip Hooks.useMemo \_ -> unsafePerformEffect do
+    _ <- launchAff_ $ writeLog (RunMemo (CalculateMemo 3)) log
+    pure (state1 + state2 + 5)
 
 memoHook :: Spec Unit
 memoHook = before initDriver $ describe "useMemo" do

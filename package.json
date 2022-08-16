@@ -10,10 +10,10 @@
     "postinstall": "node node_modules/puppeteer/install.js",
     "clean": "rm -rf output output-es",
     "test-normal": "npm run clean && npm run build:test-normal && npm run run:test-normal",
-    "build:test-normal": "spago -x test/test.dhall build && spago -x test/test.dhall bundle-app --no-build --main Performance.Test.App --to test/test.js --minify",
+    "build:test-normal": "spago -x test/test.dhall build && spago -x test/test.dhall bundle-app --no-build --main Performance.Test.App --to test/test.js",
     "run:test-normal": "node test-normal.mjs",
     "test-optimized": "npm run clean && npm run build:test-optimized && npm run run:test-optimized",
-    "build:test-optimized": "spago -x test/test.optimized.dhall build && ../purescript-backend-optimizer/backend-es/index.js bundle-app --no-build --main Performance.Test.App --to test/test.js --minify",
+    "build:test-optimized": "spago -x test/test.optimized.dhall build && ../purescript-backend-optimizer/backend-es/index.js bundle-app --no-build --main Performance.Test.App --to test/test.js",
     "run:test-optimized": "node test-optimized.mjs"
   },
   "devDependencies": {

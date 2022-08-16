@@ -42,7 +42,7 @@ mkEval inputEq _evalHookM _evalHook = case _ of
 
   H.Query q reply -> do
     HookState { stateRef } <- H.get
-    let { queryFn } = get stateRef
+    let { queryFn } = unsafePerformEffect $ Ref.read stateRef
     case queryFn of
       Nothing ->
         pure (reply unit)
@@ -57,11 +57,15 @@ mkEval inputEq _evalHookM _evalHook = case _ of
 
   H.Receive nextInput a -> do
     HookState { stateRef } <- H.get
-    let { input: prevInput } = get stateRef
+    let { input: prevInput } = unsafePerformEffect $ Ref.read stateRef
 
     unless (inputEq prevInput nextInput) do
-      let (_ :: Unit) = modify_ stateRef _ { input = nextInput }
-      void $ executeHooksAndEffects stateRef Step
+      let
+        execute = unsafePerformEffect do
+          _ <- Ref.modify_ (_ { input = nextInput }) stateRef
+          pure (executeHooksAndEffects stateRef Step)
+
+      void execute
 
     pure a
 
@@ -78,16 +82,18 @@ mkEval inputEq _evalHookM _evalHook = case _ of
   executeHooksAndEffects stateRef reason = do
     _ <- _evalHook reason
 
-    let
-      { evalQueue } = get stateRef
+    let { evalQueue } = unsafePerformEffect $ Ref.read stateRef
 
     when (not (Array.null evalQueue)) do
-      let (_ :: Unit) = modify_ stateRef _ { evalQueue = [], stateDirty = false }
+      let
+        runSequence = unsafePerformEffect do
+          Ref.modify_ (_ { evalQueue = [], stateDirty = false }) stateRef
+          pure (sequence_ evalQueue)
 
-      sequence_ evalQueue
+      runSequence
 
       let
-        { stateDirty } = get stateRef
+        { stateDirty } = unsafePerformEffect $ Ref.read stateRef
         initializeOrStepReason = reason == Initialize || reason == Step
 
       when (stateDirty && initializeOrStepReason) do
@@ -108,20 +114,19 @@ evalHook _evalHookM _evalHook reason stateRef = case _ of
     case reason of
       Initialize ->
         let
-          { componentRef, stateCells: { queue } } = get stateRef
-          newQueue = Array.snoc queue initial
-          identifier = StateId (Tuple componentRef (Array.length newQueue - 1))
-          (_ :: Unit) = modify_ stateRef _ { stateCells { queue = newQueue } }
+          identifier = unsafePerformEffect do
+            { componentRef, stateCells } <- Ref.modify (\state -> state { stateCells { queue = Array.snoc state.stateCells.queue initial }}) stateRef
+            pure (StateId (Tuple componentRef (Array.length stateCells.queue - 1)))
 
         in
           pure (reply (Tuple initial identifier))
 
       _ ->
         let
-          { componentRef, stateCells: { index, queue } } = get stateRef
-          value = unsafeGetCell index queue
-          identifier = StateId (Tuple componentRef index)
-          (_ :: Unit) = modify_ stateRef _ { stateCells { index = stepIndex index queue } }
+          { value, identifier } = unsafePerformEffect do
+            { componentRef, stateCells: { index, queue } } <- Ref.read stateRef
+            Ref.modify_ (_ { stateCells { index = stepIndex index queue } }) stateRef
+            pure { value: unsafeGetCell index queue, identifier: StateId (Tuple componentRef index) }
 
         in
           pure (reply (Tuple value identifier))
@@ -131,9 +136,8 @@ evalHook _evalHookM _evalHook reason stateRef = case _ of
       handler' :: forall b. q b -> HookM m (Maybe b)
       handler' = handler <<< toQueryValue
 
-      (_ :: Unit) = modify_ stateRef _ { queryFn = Just $ toQueryFn handler' }
-
-    in
+    in pure $ unsafePerformEffect do
+      _ <- Ref.modify_ (_ { queryFn = Just $ toQueryFn handler' }) stateRef
       pure a
 
   UseEffect mbMemos act a ->
@@ -146,21 +150,22 @@ evalHook _evalHookM _evalHook reason stateRef = case _ of
             let
               finalizer = fromMaybe (pure unit) mbFinalizer
               newQueue st = Array.snoc st.effectCells.queue (mbMemos /\ finalizer)
-              (_ :: Unit) = modify_ stateRef \s -> s { effectCells { queue = newQueue s } }
 
-            pure unit
-
-          (_ :: Unit) = modify_ stateRef \s -> s { evalQueue = Array.snoc s.evalQueue eval }
+            pure $ unsafePerformEffect do
+              _ <- Ref.modify_ (\s -> s { effectCells { queue = newQueue s } }) stateRef
+              pure unit
 
         in
-          pure a
+          pure $ unsafePerformEffect do
+            Ref.modify_ (\s -> s { evalQueue = Array.snoc s.evalQueue eval }) stateRef
+            pure a
 
       Queued ->
         pure a
 
       Step ->
         let
-          { effectCells: { index, queue } } = get stateRef
+          { effectCells: { index, queue } } = unsafePerformEffect $ Ref.read stateRef
           nextIndex = stepIndex index queue
           mbOldMemos /\ finalizer = unsafeGetCell index queue
 
@@ -178,65 +183,61 @@ evalHook _evalHookM _evalHook reason stateRef = case _ of
                       mbFinalizer <- _evalHookM (_evalHook Queued) (finalizer *> act)
 
                       let
-                        { effectCells: { queue: queue' } } = get stateRef
+                        { effectCells: { queue: queue' } } = unsafePerformEffect $ Ref.read stateRef
                         newFinalizer = fromMaybe (pure unit) mbFinalizer
                         newValue = mbMemos /\ newFinalizer
-                        newQueue = unsafeSetCell index newValue queue'
-                        (_ :: Unit) = modify_ stateRef _ { effectCells { queue = newQueue } }
 
-                      pure unit
+                      pure $ unsafePerformEffect do
+                        Ref.modify_ (_ { effectCells { queue = unsafeSetCell index newValue queue' } }) stateRef
+                        pure unit
 
-                    (_ :: Unit) =
-                      modify_ stateRef \s -> s
+                  in
+                    pure $ unsafePerformEffect do
+                      Ref.modify_ (\s -> s
                         { evalQueue = Array.snoc s.evalQueue eval
                         , effectCells { index = nextIndex }
-                        }
-
-                  in
-                    pure a
+                        }) stateRef
+                      pure a
 
                 else
-                  let
-                    (_ :: Unit) = modify_ stateRef _ { effectCells { index = nextIndex } }
-
-                  in
+                  pure $ unsafePerformEffect do
+                    Ref.modify_ (_ { effectCells { index = nextIndex } }) stateRef
                     pure a
 
             _, _ ->
-              let
-                (_ :: Unit) = modify_ stateRef _ { effectCells { index = nextIndex } }
-
-              in
+              pure $ unsafePerformEffect do
+                Ref.modify_ (_ { effectCells { index = nextIndex } }) stateRef
                 pure a
 
       Finalize ->
         let
-          { effectCells: { index, queue } } = get stateRef
+          { effectCells: { index, queue } } = unsafePerformEffect $ Ref.read stateRef
           _ /\ finalizer = unsafeGetCell index queue
           finalizeHook = _evalHookM (_evalHook Queued) finalizer
-          (_ :: Unit) =
-            modify_ stateRef \s -> s
-              { evalQueue = Array.snoc s.evalQueue finalizeHook
-              , effectCells { index = stepIndex index queue }
-              }
 
         in
-          pure a
+          pure $ unsafePerformEffect do
+            Ref.modify_ (\s -> s
+              { evalQueue = Array.snoc s.evalQueue finalizeHook
+              , effectCells { index = stepIndex index queue }
+              }) stateRef
+            pure a
 
   UseMemo memos memoFn reply ->
     case reason of
       Initialize ->
         let
-          { memoCells: { queue } } = get stateRef
-          newValue = memoFn unit
-          (_ :: Unit) = modify_ stateRef _ { memoCells { queue = Array.snoc queue (memos /\ newValue) } }
+          newValue = unsafePerformEffect do
+            let memo = memoFn unit
+            Ref.modify_ (\state -> state { memoCells { queue = Array.snoc state.memoCells.queue (memos /\ newValue) } }) stateRef
+            pure memo
 
         in
           pure (reply newValue)
 
       _ ->
         let
-          { memoCells: { index, queue } } = get stateRef
+          { memoCells: { index, queue } } = unsafePerformEffect $ Ref.read stateRef
 
           m =
             let
@@ -251,37 +252,40 @@ evalHook _evalHookM _evalHook reason stateRef = case _ of
         in
           if (Object.isEmpty m.new || not (m.new `m.eq` m.old)) then
             let
-              newValue = memoFn unit
-              newQueue = unsafeSetCell index (memos /\ newValue) queue
-              (_ :: Unit) = modify_ stateRef _ { memoCells = { index: nextIndex, queue: newQueue } }
+              newValue = unsafePerformEffect do
+                let memo = memoFn unit
+                let newQueue = unsafeSetCell index (memos /\ memo) queue
+                Ref.modify_ (_ { memoCells = { index: nextIndex, queue: newQueue } }) stateRef
+                pure memo
 
             in
               pure (reply newValue)
 
           else
-            let
-              (_ :: Unit) = modify_ stateRef _ { memoCells { index = nextIndex } }
-
-            in
+            pure $ unsafePerformEffect do
+              Ref.modify_ (_ { memoCells { index = nextIndex } }) stateRef
               pure (reply m.value)
 
   UseRef initial reply ->
     case reason of
       Initialize ->
         let
-          { refCells: { queue } } = get stateRef
-          ref = unsafePerformEffect $ Ref.new initial
-          (_ :: Unit) = modify_ stateRef _ { refCells { queue = Array.snoc queue ref } }
+          ref = unsafePerformEffect do
+            newRef <- Ref.new initial
+            Ref.modify_ (\state -> state { refCells { queue = Array.snoc state.refCells.queue newRef } }) stateRef
+            pure newRef
 
         in
           pure (reply (Tuple initial ref))
 
       _ ->
         let
-          { refCells: { index, queue } } = get stateRef
-          ref = unsafeGetCell index queue
-          value = unsafePerformEffect $ Ref.read ref
-          _ = modify_ stateRef _ { refCells { index = stepIndex index queue } }
+          { ref, value } = unsafePerformEffect do
+            { refCells: { index, queue } } <- Ref.read stateRef
+            Ref.modify_ (_ { refCells { index = stepIndex index queue } }) stateRef
+            let ref = unsafeGetCell index queue
+            value <- Ref.read ref
+            pure { ref, value }
 
         in
           pure (reply (Tuple value ref))
@@ -290,15 +294,13 @@ evalHookM :: forall q i m a. HalogenM' q i m a a -> HookM m ~> HalogenM' q i m a
 evalHookM (H.HalogenM runHooks) (HookM evalUseHookF) =
   H.HalogenM $ substFree interpretHalogenHook evalUseHookF
   where
-  interpretHalogenHook
-    :: HookF m
-         ~> Free (H.HalogenF (HookState q i m a) (HookM m Unit) SlotType OutputValue m)
+  interpretHalogenHook :: HookF m ~> Free (H.HalogenF (HookState q i m a) (HookM m Unit) SlotType OutputValue m)
   interpretHalogenHook = case _ of
     Modify (StateId (Tuple ref id)) f reply -> do
       HookState { stateRef } <- liftF $ H.State \state -> Tuple state state
 
       let
-        { componentRef, stateCells } = get stateRef
+        { componentRef, stateCells } = unsafePerformEffect $ Ref.read stateRef
 
       -- It is not safe to use `HookM` code which modifies state outside of the
       -- component that defines it, because the state identifiers are referring
@@ -327,14 +329,14 @@ evalHookM (H.HalogenM runHooks) (HookM evalUseHookF) =
           pure unit
         _ -> do
           let
-            newQueue = unsafeSetCell id next
-            (_ :: Unit) =
-              modify_ stateRef \s -> s
-                { stateCells { queue = newQueue s.stateCells.queue }
+            runHooks' = unsafePerformEffect do
+              Ref.modify_ (\s -> s
+                { stateCells { queue = unsafeSetCell id next s.stateCells.queue }
                 , stateDirty = true
-                }
+                }) stateRef
+              pure (void runHooks)
 
-          void runHooks
+          runHooks'
 
       pure (reply next)
 
@@ -376,8 +378,5 @@ unsafeSetCell index a array = unsafePartial (fromJust (Array.modifyAt index (con
 stepIndex :: forall a. Int -> Array a -> Int
 stepIndex index array = if index + 1 < Array.length array then index + 1 else 0
 
-get :: forall q i m a. Ref (InternalHookState q i m a) -> InternalHookState q i m a
-get = unsafePerformEffect <<< Ref.read
-
-modify_ :: forall q i m a. Ref (InternalHookState q i m a) -> (InternalHookState q i m a -> InternalHookState q i m a) -> Unit
-modify_ ref fn = unsafePerformEffect $ Ref.modify_ fn ref
+-- get :: forall q i m a. Ref (InternalHookState q i m a) -> InternalHookState q i m a
+-- get = unsafePerformEffect <<< Ref.read
